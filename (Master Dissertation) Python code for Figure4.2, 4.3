@@ -1,0 +1,329 @@
+import numpy as np
+import time
+import math as ma
+from math import e
+import matplotlib.pyplot as plt
+from scipy import *
+from matplotlib.patches import Ellipse
+from random import seed
+from random import random
+from decimal import Decimal, getcontext
+from scipy.integrate import quad
+from scipy.integrate import trapz
+from mpl_toolkits import mplot3d
+from random import sample
+from scipy import linalg
+from scipy.misc import derivative
+#1 Gpc = 3.085678*10**25 m
+#c = 3e5#kms^-1  # 299792458ms^-1  , 
+c = 9.7156118908e-18 #Gpc/s
+#Hubble constant
+h = 0.7
+OmegaM = 0.284
+N= 500
+numevent = 15
+zmin = 0.1
+zmax = 8
+M = 0
+xarray = np.linspace(zmin,zmax,N)
+# [Pop III , Delay, No Delay]
+gamav = [11.95,3.37,3.61]
+alphav =[2.64,2.42,2.14] 
+betav = [6.03,3.84,4.7]
+step = 1e-6
+nx = 500
+
+# refer to paper "Forecasting F(Q) cosmology with  CDM background using standard sirens" figure 3,6.
+#Fisher supernova + LISA constraint, codes for generating Fig. 4.2, 4.3 of Master dessertation
+
+##############################################################################################################################################################################################################
+#Define all the function needed 
+
+def EinvCQM(x,OmegaM):#coupled Quintessencia model
+        return 1/np.sqrt( OmegaM*(1+x)**3+ 1-OmegaM )
+  
+def integr(x,OmegaM):#integrate 1/E , return a value
+   #result , error = quad(1/E, 0, x, args=(OmegaM,lamb))
+   [integral, error] = quad(lambda x: EinvCQM(x,OmegaM), 0, x)
+   return integral
+
+def integrlist(x,OmegaM):#integrate 1/E , return an array
+   #result , error = quad(1/E, 0, x, args=(OmegaM,lamb))
+   integral = np.zeros(len(x))
+   for i in range(len(x)):
+       integral[i] = integr(x[i],OmegaM)
+   return integral
+ 
+def dl(x,OmegaM,h):# return a value
+    Ho = 299792458*h/(2.99792458*3.085678*10**25) #s^-1
+    return c*(1+x)*integr(x,OmegaM)/Ho
+
+def dllist(x,OmegaM,h):# return an array
+    Ho = 299792458*h/(2.99792458*3.085678*10**25)#s^-1
+    dllista = np.zeros(len(x))
+    dllista = c*(1+x)*integrlist(x,OmegaM)/Ho
+    return dllista
+
+def dlgw(x,OmegaM,M,h):# return a value
+    return np.sqrt( (2*np.sqrt(6)+M)/(2*np.sqrt(6)+M*EinvCQM(x,OmegaM)))*dl(x,OmegaM,h)
+
+def dllistgw(x,OmegaM,M,h):# return an array
+    dllista = np.zeros(len(x))
+    dllista = np.sqrt( (2*np.sqrt(6)+M)/(2*np.sqrt(6)+M*EinvCQM(x,OmegaM)))*dllist(x,OmegaM,h)
+    return dllista
+
+def r(x):
+    a = 0
+    if x <= 1:
+        a = 1+2*x
+    elif 1 < x < 5:   
+        a = (15-3*x)/4
+    elif x > 5:
+        a = 0
+    return a
+#probability density function
+def flisa(x,alpha,beta,gama):#no event in z<0.1
+    return gama*(x/9)**(alpha-1)*(1-x/9)**(beta-1)
+
+def sigmaphoto(x):
+    sigmaph=np.zeros(len(x))
+    for i in range(len(x)):
+        if(x[i]>2):
+            sigmaph[i] = 0.03*(1+x[i])
+        elif(x[i]<=2):
+            sigmaph[i] = 0 
+    return sigmaph
+    
+def deltadl_uncert(x,OmegaM,M,h,step):
+    Ho = 299792458*h/(2.99792458*3.085678e25)#s^-1
+    Fdelens =np.zeros(len(x))
+    sigmalens=np.zeros(len(x))
+    sigmadelens=np.zeros(len(x))
+    sigmav=np.zeros(len(x))
+    sigmainst=np.zeros(len(x))
+    for i in range(len(x)):
+        Fdelens[i] = 1-0.3/(np.pi/2)*np.arctan(x[i]/0.073)
+        sigmalens[i] = 0.066*dlgw(x[i],OmegaM,M,h)*((1-(1+x[i])**-0.25)/0.25)**1.8
+        sigmav[i] = (1+c*(1+x[i])**2*EinvCQM(x[i],OmegaM)/(Ho*dlgw(x[i],OmegaM,M,h)))*(1.6203896e-20/c)*dlgw(x[i],OmegaM,M,h)
+    sigmainst = 0.05*dllistgw(x,OmegaM,M,h)**2/36.6
+    sigmadelens = sigmalens*Fdelens
+    #sigmalisa2 = sigmadelens**2+sigmav**2+sigmainst**2+((dllistgw(x+step,OmegaM,M,h)-dllistgw(x-step,OmegaM,M,h))*sigmaphoto(x)/(2*step))**2
+    sigmalisa2 =sigmadelens**2+sigmav**2+sigmainst**2+(derivative(dllistgw, x, dx=1e-6, args=(OmegaM,M,h)) *sigmaphoto(x))**2 
+    return np.sqrt(sigmalisa2)
+
+#finite different method, return an array
+#creat first dvviative method for Fisher Matrix 
+def dfunc_ome(randomzlist,OmegaM,M,h,step):
+    return (dllistgw(randomzlist,OmegaM+step,M,h) - dllistgw(randomzlist,OmegaM-step,M,h))/(2*step)
+def dfunc_M(randomzlist,OmegaM,M,h,step):
+    return (dllistgw(randomzlist,OmegaM,M+step,h) - dllistgw(randomzlist,OmegaM,M-step,h))/(2*step)
+def dfunc_h(randomzlist,OmegaM,M,h,step):
+    return (dllistgw(randomzlist,OmegaM,M,h+step) - dllistgw(randomzlist,OmegaM,M,h-step))/(2*step)
+
+##############################################################################################################################################################################################################
+#Start of the main program
+#create mock catalog for LCDM model
+#refer to equation 36,37
+randomzlist = np.zeros([3,numevent+1])
+for j in range(3):  
+    i = integ = maxvalue= 0
+    [integ, err] = quad(lambda x: flisa(x,alphav[j],betav[j],gamav[j]), zmin, zmax) #refer to FIG. 1, the populations of Pop III, Delay and No Delay case
+    #calN =  numevent/integ
+    maxvalue = max(flisa(xarray,alphav[j],betav[j],gamav[j])/integ)
+    plt.figure(j)
+    plt.plot(xarray,flisa(xarray,alphav[j],betav[j],gamav[j])/integ,'b-')
+    while (i < numevent+1):
+        yvalue = maxvalue*random() #random y value within 0 to maxvalue
+        randomz = zmax*random()#random redshift value within 0 to 8
+        while(randomz < zmin):#set redshift value within 0.1 to 8
+            randomz = zmax*random()
+            if (yvalue <= flisa(randomz,alphav[j],betav[j],gamav[j])/integ): #monte carlo method, generate the number of event along redshift follow the probabbilty density function
+                if(randomz != 0):
+                    plt.plot(randomz,yvalue,".")
+                    randomzlist[j,i] = randomz 
+                    i = i+1
+    randomzlist[j].sort()
+#randomzlist[numevent] = 0#add redshift = 0 into the last position of array     
+
+dl_listgw =deltadl_list = np.zeros(len(randomzlist[2]))
+dl_listgw = dllistgw(randomzlist[2],OmegaM,M,h)
+dl_listgwtheo = dllistgw(xarray,OmegaM,M,h)
+#error bar on theoritical curve
+deltadl_list = deltadl_uncert(randomzlist[2],OmegaM,M,h,step)
+dlvalue = np.zeros(numevent+1)
+
+for i in range(numevent+1): 
+    dlvalue[i] = np.random.normal(dl_listgw[i],deltadl_list[i])
+plt.figure(3)
+plt.plot(xarray,dl_listgwtheo,'b-')
+plt.plot(randomzlist[2],dlvalue,".")
+plt.errorbar(randomzlist[2],dlvalue, yerr=deltadl_list , linestyle="None",capsize = 3)
+
+#######################################################################################################
+#fisher matrix
+
+F =  np.zeros([3,3])
+IF =  np.zeros([3,3])
+
+#construct Fisher Matrix with parameter order: omega,M , h 
+#LISA ,fisher matrix
+
+F[0,0] =  np.sum(dfunc_ome(randomzlist[2],OmegaM,M,h,step)**2/deltadl_list**2)+1/(0.012472699858038479)**2 #add OmegaM constraint from supernova data (compute using grid method) and meaasure the 1 sigma value by eyes on the plot
+F[1,1] = np.sum(dfunc_M(randomzlist[2],OmegaM,M,h,step)**2/deltadl_list**2)
+F[2,2] =  np.sum(dfunc_h(randomzlist[2],OmegaM,M,h,step)**2/deltadl_list**2)
+F[0,1] = np.sum(dfunc_ome(randomzlist[2],OmegaM,M,h,step)*dfunc_M(randomzlist[2],OmegaM,M,h,step)/deltadl_list**2)
+F[0,2] = np.sum(dfunc_ome(randomzlist[2],OmegaM,M,h,step)*dfunc_h(randomzlist[2],OmegaM,M,h,step)/deltadl_list**2)
+F[1,2] = np.sum(dfunc_M(randomzlist[2],OmegaM,M,h,step)*dfunc_h(randomzlist[2],OmegaM,M,h,step)/deltadl_list**2)
+F[1,0] = F[0,1] 
+F[2,0] = F[0,2]
+F[2,1] = F[1,2]
+
+print("Fisher Matrix GW\n",F)
+
+IF = linalg.inv(F)
+#FInv = np.mat(F).I #slight different in the value when using .I instead of .inv() when taking inverse of matrix
+
+#since the 3x3 Fisher matrix are taking the inverse , so by removing the maganaliztion paras. have already taken account the(maganaliztion para.),unlike composing the Fisher Matrix 2x2 and take the inverse which is not maganalization
+print("Inverse Fisher Matrix GW\n",IF)
+#new fisher and cor matrix
+
+# h xaxis, M yaxis
+amaj2 = (IF[2,2]+IF[1,1])/2 +np.sqrt(((IF[2,2]-IF[1,1])**2)/4 +IF[2,1]**2)
+bmin2 = (IF[2,2]+IF[1,1])/2 -np.sqrt(((IF[2,2]-IF[1,1])**2)/4 +IF[2,1]**2)
+theta = np.arctan(2*IF[2,1]/(IF[2,2]-IF[1,1]))/2 #in radian
+theta = theta*180/np.pi 
+
+print("a=",np.sqrt(amaj2),"\n b=",np.sqrt(bmin2), "\n angle=" ,theta )
+
+#the condition is refer to the larger eigenvalue of corivance matrix, refer to lower rate of change of slope of the contour/ellipse, so it refer to semimajor axis,this refer to smaller eigenvalue of fisher matrix.
+#on reverse,smaller eigenvalue of corivance matrix, refer to higher rate of change of slope of the contour/ellipse, so it refer to semiminor axis,this refer to larger eigenvalue of fisher matrix.
+#and the condition 2*IF[2,1]/(-IF[2,2]+IF[1,1]+np.sqrt((IF[2,2]-IF[1,1])**2+4*IF[2,1]**2) always refer to semimajor axis(longer one)
+
+if (theta>0):
+    if(2*IF[2,1]/(-IF[2,2]+IF[1,1]+np.sqrt((IF[2,2]-IF[1,1])**2+4*IF[2,1]**2)) > 0):
+        theta = theta
+    elif(2*IF[2,1]/(-IF[2,2]+IF[1,1]+np.sqrt((IF[2,2]-IF[1,1])**2+4*IF[2,1]**2)) < 0):
+        theta = theta+90
+elif (theta<0):
+    if(2*IF[2,1]/(-IF[2,2]+IF[1,1]+np.sqrt((IF[2,2]-IF[1,1])**2+4*IF[2,1]**2)) > 0):
+        theta = theta+90
+    elif(2*IF[2,1]/(-IF[2,2]+IF[1,1]+np.sqrt((IF[2,2]-IF[1,1])**2+4*IF[2,1]**2)) < 0):
+        theta = theta
+
+fig,ax=plt.subplots(3,3,sharex=False, sharey=False)
+ellipse = Ellipse((h,M), 2*np.sqrt(amaj2*6.17),2*np.sqrt(bmin2*6.17),angle=theta, alpha=0.5)
+ax[2,0].add_artist(ellipse)
+ellipse = Ellipse((h,M), 2*np.sqrt(amaj2*2.3),2*np.sqrt(bmin2*2.3),angle=theta, alpha=0.9)
+ax[2,0].add_artist(ellipse)
+ax[2,0].set_xlim(0.6,1.0) 
+ax[2,0].set_ylim(-2,8)  
+ax[2,0].plot(h,M,'r.')
+ax[2,0].set_xlabel("h")
+ax[2,0].set_ylabel("M")
+ax[2,0].axvline(x=h, color='b', linestyle='dotted')
+ax[2,0].axhline(y=M, color='b', linestyle='dotted')
+
+
+likelihoodh = np.zeros([nx])
+h1 = np.linspace(0.6,1.0, nx)
+hbest = 0
+likelihoodh = e**(-0.5*((h1-h)**2/IF[2,2])) #maganilization of two parameters and form 1D gaussian distribution and make plot using formula https://en.wikipedia.org/wiki/Normal_distribution
+sumh = np.sum(likelihoodh)#normalization factor
+likelihoodh = likelihoodh/sumh
+maxvalueh = max(likelihoodh) #the array index of maxvalue is mean of h
+indexh = np.where(likelihoodh == maxvalueh)
+ax[0,0].plot(h1,likelihoodh,'b-')
+ax[0,0].axvline(x=h1[indexh[0][0]], color='b', linestyle='dotted')
+
+likelihoodom= np.zeros([nx])
+om1 = np.linspace(0.25,0.32, nx)
+ombest = 0
+likelihoodom = e**(-0.5*((om1-OmegaM)**2/IF[0,0]))
+sumom = np.sum(likelihoodom)
+likelihoodom = likelihoodom/sumom
+maxvalueom = max(likelihoodom)
+indexom = np.where(likelihoodom == maxvalueom)
+ax[1,1].plot(om1,likelihoodom,'b-')
+ax[1,1].axvline(x=om1[indexom[0]], color='b', linestyle='dotted')
+
+likelihoodM = np.zeros([nx])
+M1 = np.linspace(-2.0,8.0, nx)
+Mbest = 0
+likelihoodM = e**(-0.5*((M1-M)**2/IF[1,1]))
+sumM = np.sum(likelihoodM)
+likelihoodM = likelihoodM/sumM
+maxvalueM = max(likelihoodM)
+indexM = np.where(likelihoodM == maxvalueM)
+ax[2,2].plot(M1,likelihoodM,'b-')
+ax[2,2].axvline(x=M1[indexM[0][0]], color='b', linestyle='dotted')
+
+#######################################################################################################
+
+# h (x axis), OmegaM(y axis)
+amaj2 = (IF[2,2]+IF[0,0])/2 +np.sqrt(((IF[2,2]-IF[0,0])**2)/4 +IF[2,0]**2)
+bmin2 = (IF[2,2]+IF[0,0])/2 -np.sqrt(((IF[2,2]-IF[0,0])**2)/4 +IF[2,0]**2)
+theta = np.arctan(2*IF[2,0]/(IF[2,2]-IF[0,0]))/2 #in radian
+theta = theta*180/np.pi 
+
+print("a=",np.sqrt(amaj2),"\n b=",np.sqrt(bmin2), "\n angle=" ,theta )
+#valid for theta>0
+if (theta>0):
+    if(2*IF[2,0]/(-IF[2,2]+IF[0,0]+np.sqrt((IF[2,2]-IF[0,0])**2+4*IF[2,0]**2)) > 0):
+        theta = theta
+    elif(2*IF[2,0]/(-IF[2,2]+IF[0,0]+np.sqrt((IF[2,2]-IF[0,0])**2+4*IF[2,0]**2)) < 0):
+        theta = theta+90
+elif (theta<0):
+    if(2*IF[2,0]/(-IF[2,2]+IF[0,0]+np.sqrt((IF[2,2]-IF[0,0])**2+4*IF[2,0]**2)) > 0):
+        theta = theta+90
+    elif(2*IF[2,0]/(-IF[2,2]+IF[0,0]+np.sqrt((IF[2,2]-IF[0,0])**2+4*IF[2,0]**2)) < 0):
+        theta = theta
+
+ellipse = Ellipse((h,OmegaM), 2*np.sqrt(amaj2*6.17),2*np.sqrt(bmin2*6.17),angle=theta, alpha=0.5)
+ax[1,0].add_artist(ellipse)
+ellipse = Ellipse((h,OmegaM), 2*np.sqrt(amaj2*2.3),2*np.sqrt(bmin2*2.3),angle=theta, alpha=0.9)
+ax[1,0].add_artist(ellipse)
+ax[1,0].set_xlim(0.6,1.0)   
+ax[1,0].set_ylim(0.25,0.32)
+ax[1,0].plot(h,OmegaM,'r.')
+ax[1,0].set_xlabel("h")
+ax[1,0].set_ylabel("OmegaM")
+ax[1,0].axvline(x=h, color='b', linestyle='dotted')
+ax[1,0].axhline(y=OmegaM, color='b', linestyle='dotted')
+
+#######################################################################################################
+
+# OmegaM (x axis),M(y axis)
+
+amaj2 = (IF[0,0]+IF[1,1])/2 +np.sqrt(((IF[0,0]-IF[1,1])**2)/4 +IF[0,1]**2)
+bmin2 = (IF[0,0]+IF[1,1])/2 -np.sqrt(((IF[0,0]-IF[1,1])**2)/4 +IF[0,1]**2)
+theta = np.arctan(2*IF[0,1]/(IF[0,0]-IF[1,1]))/2 #in radian
+theta = theta*180/np.pi 
+
+print("a=",np.sqrt(amaj2),"\n b=",np.sqrt(bmin2), "\n angle=" ,theta )
+
+if (theta>0):
+    if(2*IF[0,1]/(-IF[1,1]+IF[0,0]+np.sqrt((IF[1,1]-IF[0,0])**2+4*IF[1,0]**2)) > 0):
+        theta = theta
+    elif(2*IF[0,1]/(-IF[1,1]+IF[0,0]+np.sqrt((IF[1,1]-IF[0,0])**2+4*IF[1,0]**2))< 0):
+        theta = theta+90
+elif (theta<0):
+    if(2*IF[0,1]/(-IF[1,1]+IF[0,0]+np.sqrt((IF[1,1]-IF[0,0])**2+4*IF[1,0]**2)) > 0):
+        theta = theta+90
+    elif(2*IF[0,1]/(-IF[1,1]+IF[0,0]+np.sqrt((IF[1,1]-IF[0,0])**2+4*IF[1,0]**2)) < 0):
+        theta = theta
+
+
+ellipse = Ellipse((OmegaM,M), 2*np.sqrt(amaj2*6.17),2*np.sqrt(bmin2*6.17),angle=theta, alpha=0.5)
+ax[2,1].add_artist(ellipse)
+ellipse = Ellipse((OmegaM,M), 2*np.sqrt(amaj2*2.3),2*np.sqrt(bmin2*2.3),angle=theta, alpha=0.9)
+ax[2,1].add_artist(ellipse)
+ax[2,1].set_xlim(0.25,0.32)  
+ax[2,1].set_ylim(-2,8) 
+ax[2,1].plot(OmegaM,M,'r.')
+ax[2,1].set_xlabel("OmegaM")
+ax[2,1].set_ylabel("M")
+ax[2,1].axvline(x=OmegaM, color='b', linestyle='dotted')
+ax[2,1].axhline(y=M, color='b', linestyle='dotted')
+##############################################################################################################################################################################################################
+    
+
